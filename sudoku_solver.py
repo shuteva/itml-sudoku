@@ -3,7 +3,7 @@ Sudoku Solver Comparison: CSP vs ANN vs Hybrid
 Author: Mia Shuteva – 89231346
 Project: Runtime-Accuracy Trade-off Analysis
 """
-
+from pulp import LpProblem, LpVariable, lpSum, LpStatus, value, PULP_CBC_CMD
 import numpy as np
 import pandas as pd
 import time
@@ -46,72 +46,61 @@ def grid_to_string(grid: np.ndarray) -> str:
 
 
 # ─────────────────────────────────────────────
-# ALGORITHM 1 – CONSTRAINT SATISFACTION (CSP)
-# ─────────────────────────────────────────────
+# ALGORITHM 1 – CONSTRAINT SATISFACTION (CSP) with MILP
 
-class CSPSolver:
-    """
-    Backtracking CSP solver with forward-checking (arc consistency).
-    Heuristic: Minimum Remaining Values (MRV) for cell selection.
-    """
 
+class MILPSolver:
     def solve(self, puzzle_str: str) -> tuple[str | None, float]:
         grid = string_to_grid(puzzle_str)
         t0 = time.perf_counter()
-        solved = self._backtrack(grid)
-        elapsed = time.perf_counter() - t0
-        if solved:
-            return grid_to_string(grid), elapsed
-        return None, elapsed
-
-    def _is_valid(self, grid: np.ndarray, row: int, col: int, num: int) -> bool:
-        if num in grid[row]:
-            return False
-        if num in grid[:, col]:
-            return False
-        br, bc = 3 * (row // 3), 3 * (col // 3)
-        if num in grid[br:br+3, bc:bc+3]:
-            return False
-        return True
-
-    def _get_candidates(self, grid: np.ndarray, row: int, col: int) -> set:
-        used = (
-            set(grid[row])
-            | set(grid[:, col])
-            | set(grid[3*(row//3):3*(row//3)+3, 3*(col//3):3*(col//3)+3].flatten())
-        )
-        return set(range(1, 10)) - used
-
-    def _find_mrv_cell(self, grid: np.ndarray) -> tuple[int, int] | None:
-        """Return the empty cell with the fewest legal candidates (MRV heuristic)."""
-        best_cell = None
-        best_count = 10
+        
+        prob = LpProblem("Sudoku")
+        # Binary variable x[r][c][d] = 1 if cell (r,c) has digit d
+        x = [[[LpVariable(f"x_{r}_{c}_{d}", cat="Binary")
+               for d in range(9)] for c in range(9)] for r in range(9)]
+        
+        # Each cell has exactly one digit
         for r in range(9):
             for c in range(9):
-                if grid[r, c] == 0:
-                    count = len(self._get_candidates(grid, r, c))
-                    if count == 0:
-                        return (-1, -1)   # dead end
-                    if count < best_count:
-                        best_count = count
-                        best_cell = (r, c)
-        return best_cell
+                prob += lpSum(x[r][c]) == 1
 
-    def _backtrack(self, grid: np.ndarray) -> bool:
-        cell = self._find_mrv_cell(grid)
-        if cell is None:
-            return True           # all cells filled
-        if cell == (-1, -1):
-            return False          # contradiction
+        # Each digit once per row
+        for r in range(9):
+            for d in range(9):
+                prob += lpSum(x[r][c][d] for c in range(9)) == 1
 
-        row, col = cell
-        for num in self._get_candidates(grid, row, col):
-            grid[row, col] = num
-            if self._backtrack(grid):
-                return True
-            grid[row, col] = 0
-        return False
+        # Each digit once per column
+        for c in range(9):
+            for d in range(9):
+                prob += lpSum(x[r][c][d] for r in range(9)) == 1
 
+        # Each digit once per 3x3 box
+        for br in range(3):
+            for bc in range(3):
+                for d in range(9):
+                    prob += lpSum(
+                        x[br*3+r][bc*3+c][d]
+                        for r in range(3) for c in range(3)
+                    ) == 1
+
+        # Fix pre-filled clues
+        for r in range(9):
+            for c in range(9):
+                if grid[r, c] != 0:
+                    prob += x[r][c][grid[r, c] - 1] == 1
+
+        prob.solve(PULP_CBC_CMD(msg=0))
+        elapsed = time.perf_counter() - t0
+
+        if LpStatus[prob.status] == "Optimal":
+            result = np.zeros((9, 9), dtype=int)
+            for r in range(9):
+                for c in range(9):
+                    for d in range(9):
+                        if value(x[r][c][d]) > 0.5:
+                            result[r, c] = d + 1
+            return grid_to_string(result), elapsed
+        return None, elapsed
 
 # ─────────────────────────────────────────────
 # ALGORITHM 2 – ARTIFICIAL NEURAL NETWORK (ANN)
@@ -251,7 +240,7 @@ class HybridSolver:
     complete / correct the remaining cells via backtracking.
     """
 
-    def __init__(self, ann: ANNSolver, csp: CSPSolver):
+    def __init__(self, ann: ANNSolver, csp: MILPSolver):
         self.ann = ann
         self.csp = csp
 
@@ -319,11 +308,11 @@ def evaluate(solver, df: pd.DataFrame, label: str) -> dict:
 # MAIN PIPELINE
 # ─────────────────────────────────────────────
 
-def run_pipeline(csv_path: str, n_samples: int = 500, ann_epochs: int = 3):
+def run_pipeline(csv_path: str, n_samples: int, ann_epochs: int):
     df = load_dataset(csv_path, n_samples=n_samples)
 
     # ── Initialise solvers ────────────────────────────────────────────────────
-    csp = CSPSolver()
+    csp = MILPSolver()
     ann = ANNSolver()
 
     ann.build_model()

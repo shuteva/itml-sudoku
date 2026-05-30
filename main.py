@@ -1,6 +1,6 @@
 """
-main.py – Full Pipeline Runner
-Mia Shuteva – 89231346
+main.py
+Mia Shuteva-89231346
 
 Usage:
     python main.py sudoku.csv
@@ -19,8 +19,10 @@ from statistics_analysis import analyse
 
 
 def main():
+    #Allows the user to input the path to the CSV file, number of samples, and number of
+    #ANN training epochs via command line argument
     parser = argparse.ArgumentParser(
-        description="Sudoku Solver Comparison Pipeline – Mia Shuteva 89231346"
+        description="Sudoku Solver Comparison– Mia Shuteva 89231346"
     )
     parser.add_argument(
         "csv_path",
@@ -41,12 +43,14 @@ def main():
     print(" Mia Shuteva – 89231346")
     print("=" * 60)
 
+    #load users input and run the pipeline
     summary = run_pipeline(
         csv_path=args.csv_path,
         n_samples=args.samples,
         ann_epochs=args.epochs,
     )
 
+    
     analyse(summary)
 
     print("\n" + "=" * 60)
